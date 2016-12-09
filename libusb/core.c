@@ -77,6 +77,7 @@ static const struct libusb_version libusb_version_internal =
 static int default_context_refcnt = 0;
 static usbi_mutex_static_t default_context_lock = USBI_MUTEX_INITIALIZER;
 static struct timeval timestamp_origin = { 0, 0 };
+static libusb_log_handler_cb log_handler = NULL;
 
 usbi_mutex_static_t active_contexts_lock = USBI_MUTEX_INITIALIZER;
 struct list_head active_contexts_list;
@@ -396,6 +397,7 @@ if (cfg != desired)
   * - libusb_get_device_speed()
   * - libusb_get_iso_packet_buffer()
   * - libusb_get_iso_packet_buffer_simple()
+  * - libusb_get_max_iso_packet_size_endpoint()
   * - libusb_get_max_iso_packet_size()
   * - libusb_get_max_packet_size()
   * - libusb_get_next_timeout()
@@ -433,6 +435,7 @@ if (cfg != desired)
   * - libusb_set_auto_detach_kernel_driver()
   * - libusb_set_configuration()
   * - libusb_set_debug()
+  * - libusb_set_log_handler()
   * - libusb_set_interface_alt_setting()
   * - libusb_set_iso_packet_lengths()
   * - libusb_setlocale()
@@ -1075,6 +1078,49 @@ out:
  * Calculate the maximum packet size which a specific endpoint is capable is
  * sending or receiving in the duration of 1 microframe
  *
+ * The calculation is based on the wMaxPacketSize field in the endpoint 
+ * descriptor as described in section 9.6.6 in the USB 2.0 specifications.
+ *
+ * If acting on an isochronous or interrupt endpoint, this function will
+ * multiply the value found in bits 0:10 by the number of transactions per
+ * microframe (determined by bits 11:12). Otherwise, this function just
+ * returns the numeric value found in bits 0:10.
+ *
+ * This function is useful for setting up isochronous transfers, for example
+ * you might pass the return value from this function to
+ * libusb_set_iso_packet_lengths() in order to set the length field of every
+ * isochronous packet in a transfer.
+ *
+ * Since v1.0.21.
+ *
+ * \param endpoint descriptor in question
+ * \returns the maximum packet size which can be sent/received on this endpoint
+ * \returns LIBUSB_ERROR_INVALID_PARAM if the endpoint descriptor is null
+ */
+int API_EXPORTED libusb_get_max_iso_packet_size_endpoint(const struct libusb_endpoint_descriptor *ep)
+{
+	enum libusb_transfer_type ep_type;
+	uint16_t val;
+	int r;
+
+	if (!ep)
+		return LIBUSB_ERROR_INVALID_PARAM;
+	
+	val = ep->wMaxPacketSize;
+	ep_type = (enum libusb_transfer_type) (ep->bmAttributes & 0x3);
+
+	r = val & 0x07ff;
+	if (ep_type == LIBUSB_TRANSFER_TYPE_ISOCHRONOUS
+			|| ep_type == LIBUSB_TRANSFER_TYPE_INTERRUPT)
+		r *= (1 + ((val >> 11) & 3));
+
+	return r;
+}
+
+/** \ingroup libusb_dev
+ * Calculate the maximum packet size which a specific endpoint is capable is
+ * sending or receiving in the duration of 1 microframe
+ *
  * Only the active configuration is examined. The calculation is based on the
  * wMaxPacketSize field in the endpoint descriptor as described in section
  * 9.6.6 in the USB 2.0 specifications.
@@ -1102,8 +1148,6 @@ int API_EXPORTED libusb_get_max_iso_packet_size(libusb_device *dev,
 {
 	struct libusb_config_descriptor *config;
 	const struct libusb_endpoint_descriptor *ep;
-	enum libusb_transfer_type ep_type;
-	uint16_t val;
 	int r;
 
 	r = libusb_get_active_config_descriptor(dev, &config);
@@ -1119,13 +1163,7 @@ int API_EXPORTED libusb_get_max_iso_packet_size(libusb_device *dev,
 		goto out;
 	}
 
-	val = ep->wMaxPacketSize;
-	ep_type = (enum libusb_transfer_type) (ep->bmAttributes & 0x3);
-
-	r = val & 0x07ff;
-	if (ep_type == LIBUSB_TRANSFER_TYPE_ISOCHRONOUS
-			|| ep_type == LIBUSB_TRANSFER_TYPE_INTERRUPT)
-		r *= (1 + ((val >> 11) & 3));
+	r = libusb_get_max_iso_packet_size_endpoint(ep);
 
 out:
 	libusb_free_config_descriptor(config);
@@ -1218,26 +1256,7 @@ int usbi_clear_event(struct libusb_context *ctx)
 	return 0;
 }
 
-/** \ingroup libusb_dev
- * Open a device and obtain a device handle. A handle allows you to perform
- * I/O on the device in question.
- *
- * Internally, this function adds a reference to the device and makes it
- * available to you through libusb_get_device(). This reference is removed
- * during libusb_close().
- *
- * This is a non-blocking function; no requests are sent over the bus.
- *
- * \param dev the device to open
- * \param dev_handle output location for the returned device handle pointer. Only
- * populated when the return code is 0.
- * \returns 0 on success
- * \returns LIBUSB_ERROR_NO_MEM on memory allocation failure
- * \returns LIBUSB_ERROR_ACCESS if the user has insufficient permissions
- * \returns LIBUSB_ERROR_NO_DEVICE if the device has been disconnected
- * \returns another LIBUSB_ERROR code on other failure
- */
-int API_EXPORTED libusb_open(libusb_device *dev,
+static int do_open(libusb_device *dev, intptr_t fd,
 	libusb_device_handle **dev_handle)
 {
 	struct libusb_context *ctx = DEVICE_CTX(dev);
@@ -1263,6 +1282,7 @@ int API_EXPORTED libusb_open(libusb_device *dev,
 	_dev_handle->dev = libusb_ref_device(dev);
 	_dev_handle->auto_detach_kernel_driver = 0;
 	_dev_handle->claimed_interfaces = 0;
+	_dev_handle->associated_fd = fd;
 	memset(&_dev_handle->os_priv, 0, priv_size);
 
 	r = usbi_backend->open(_dev_handle);
@@ -1280,6 +1300,60 @@ int API_EXPORTED libusb_open(libusb_device *dev,
 	*dev_handle = _dev_handle;
 
 	return 0;
+}
+
+/** \ingroup libusb_dev
+ * Open a device and obtain a device handle. A handle allows you to perform
+ * I/O on the device in question.
+ *
+ * Internally, this function adds a reference to the device and makes it
+ * available to you through libusb_get_device(). This reference is removed
+ * during libusb_close().
+ *
+ * This is a non-blocking function; no requests are sent over the bus.
+ *
+ * \param dev the device to open
+ * \param dev_handle output location for the returned device handle pointer. Only
+ * populated when the return code is 0.
+ * \returns 0 on success
+ * \returns LIBUSB_ERROR_NO_MEM on memory allocation failure
+ * \returns LIBUSB_ERROR_ACCESS if the user has insufficient permissions
+ * \returns LIBUSB_ERROR_NO_DEVICE if the device has been disconnected
+ * \returns another LIBUSB_ERROR code on other failure
+ */
+int API_EXPORTED libusb_open(libusb_device *dev,
+	libusb_device_handle **dev_handle)
+{
+	return do_open(dev, -1, dev_handle);
+}
+
+ /** \ingroup libusb_dev
+ * Open a device and obtain a device handle. A handle allows you to perform
+ * I/O on the device in question.
+ *
+ * Internally, this function adds a reference to the device and makes it
+ * available to you through libusb_get_device(). This reference is removed
+ * during libusb_close().
+ *
+ * This is a non-blocking function; no requests are sent over the bus.
+ *
+ * This function allows to associate a device handle with the existing file 
+ * descriptor.
+ *
+ * \param dev the device to open
+ * \param fd the file descriptor to associate with the device 
+ * \param dev_handle output location for the returned device handle pointer. Only
+ * populated when the return code is 0.
+ * \returns 0 on success
+ * \returns LIBUSB_ERROR_NO_MEM on memory allocation failure
+ * \returns LIBUSB_ERROR_ACCESS if the user has insufficient permissions
+ * \returns LIBUSB_ERROR_NO_DEVICE if the device has been disconnected
+ * \returns another LIBUSB_ERROR code on other failure
+ */
+int API_EXPORTED libusb_fdopen(libusb_device *dev, intptr_t fd,
+	libusb_device_handle **dev_handle)
+{
+	return do_open(dev, fd, dev_handle);
 }
 
 /** \ingroup libusb_dev
@@ -2047,6 +2121,22 @@ void API_EXPORTED libusb_set_debug(libusb_context *ctx, int level)
 }
 
 /** \ingroup libusb_lib
+ * Set log handler.
+ *
+ * libusb will redirect all its log messages to the provided callback function.
+ *
+ * If libusb was compiled without any message logging, the callback function will 
+ * never be called.
+ *
+ * \param ctx the context to operate on, or NULL for the default context
+ * \param callback callback function to set, or NULL to stop log messages redirection
+ */
+void API_EXPORTED libusb_set_log_handler(libusb_log_handler_cb callback)
+{
+	log_handler = callback;
+}
+
+/** \ingroup libusb_lib
  * Initialize libusb. This function must be called before calling any other
  * libusb function.
  *
@@ -2221,6 +2311,15 @@ void API_EXPORTED libusb_exit(struct libusb_context *ctx)
 		}
 		usbi_mutex_unlock(&ctx->usb_devs_lock);
 	}
+	else {
+		/* if hotplug is disabled the devices must be unrefed to avoid a memory leak */
+		if (!list_empty(&ctx->usb_devs)) {
+			list_for_each_entry_safe(dev, next, &ctx->usb_devs, list, struct libusb_device) {
+				usbi_dbg("libusb_exit: unref device %d.%d (%lu) refs = %d", dev->bus_number, dev->device_address, dev->session_data, dev->refcnt);
+				libusb_unref_device(dev);
+			}
+		}
+	}
 
 	/* a few sanity checks. don't bother with locking because unless
 	 * there is an application bug, nobody will be accessing these. */
@@ -2346,7 +2445,11 @@ static void usbi_log_str(struct libusb_context *ctx,
 	fputs(str, stderr);
 #endif
 #else
-	fputs(str, stderr);
+	if (log_handler) {
+		log_handler(level, str);
+	}
+	else
+		fputs(str, stderr);
 #endif /* USE_SYSTEM_LOGGING_FACILITY */
 	UNUSED(ctx);
 	UNUSED(level);

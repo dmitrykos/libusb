@@ -67,6 +67,12 @@ typedef unsigned __int32  uint32_t;
  * As this can be problematic if you include windows.h after libusb.h
  * in your sources, we force windows.h to be included first. */
 #if defined(_WIN32) || defined(__CYGWIN__) || defined(_WIN32_WCE)
+#ifdef _DEBUG
+	#ifndef _CRTDBG_MAP_ALLOC
+		#define _CRTDBG_MAP_ALLOC
+	#endif
+	#include <crtdbg.h>
+#endif
 #include <windows.h>
 #if defined(interface)
 #undef interface
@@ -1303,9 +1309,19 @@ enum libusb_log_level {
 	LIBUSB_LOG_LEVEL_DEBUG,
 };
 
+/** \ingroup libusb_lib
+ * Callback function, invoked for a log message.
+ * \param ctx context this callback is registered with
+ * \param level the log level, see \ref libusb_log_level for a description
+ * \param str the log message
+ * \see libusb_set_log_handler()
+ */
+typedef void (LIBUSB_CALL *libusb_log_handler_cb)(enum libusb_log_level level, const char *str);
+
 int LIBUSB_CALL libusb_init(libusb_context **ctx);
 void LIBUSB_CALL libusb_exit(libusb_context *ctx);
 void LIBUSB_CALL libusb_set_debug(libusb_context *ctx, int level);
+void LIBUSB_CALL libusb_set_log_handler(libusb_log_handler_cb callback);
 const struct libusb_version * LIBUSB_CALL libusb_get_version(void);
 int LIBUSB_CALL libusb_has_capability(uint32_t capability);
 const char * LIBUSB_CALL libusb_error_name(int errcode);
@@ -1367,10 +1383,12 @@ uint8_t LIBUSB_CALL libusb_get_device_address(libusb_device *dev);
 int LIBUSB_CALL libusb_get_device_speed(libusb_device *dev);
 int LIBUSB_CALL libusb_get_max_packet_size(libusb_device *dev,
 	unsigned char endpoint);
+int LIBUSB_CALL libusb_get_max_iso_packet_size_endpoint(const struct libusb_endpoint_descriptor *ep);
 int LIBUSB_CALL libusb_get_max_iso_packet_size(libusb_device *dev,
 	unsigned char endpoint);
 
 int LIBUSB_CALL libusb_open(libusb_device *dev, libusb_device_handle **dev_handle);
+int LIBUSB_CALL libusb_fdopen(libusb_device *dev, intptr_t fd, libusb_device_handle **dev_handle);
 void LIBUSB_CALL libusb_close(libusb_device_handle *dev_handle);
 libusb_device * LIBUSB_CALL libusb_get_device(libusb_device_handle *dev_handle);
 

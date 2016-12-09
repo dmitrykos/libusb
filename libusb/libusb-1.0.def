@@ -76,6 +76,8 @@ EXPORTS
   libusb_get_device_list@8 = libusb_get_device_list
   libusb_get_device_speed
   libusb_get_device_speed@4 = libusb_get_device_speed
+  libusb_get_max_iso_packet_size_endpoint
+  libusb_get_max_iso_packet_size_endpoint@4 = libusb_get_max_iso_packet_size_endpoint
   libusb_get_max_iso_packet_size
   libusb_get_max_iso_packet_size@8 = libusb_get_max_iso_packet_size
   libusb_get_max_packet_size
@@ -132,6 +134,8 @@ EXPORTS
   libusb_lock_event_waiters@4 = libusb_lock_event_waiters
   libusb_open
   libusb_open@8 = libusb_open
+  libusb_fdopen
+  libusb_fdopen@12 = libusb_fdopen  
   libusb_open_device_with_vid_pid
   libusb_open_device_with_vid_pid@12 = libusb_open_device_with_vid_pid
   libusb_pollfds_handle_timeouts
@@ -148,6 +152,8 @@ EXPORTS
   libusb_set_configuration@8 = libusb_set_configuration
   libusb_set_debug
   libusb_set_debug@8 = libusb_set_debug
+  libusb_set_log_handler
+  libusb_set_log_handler@4 = libusb_set_log_handler
   libusb_set_interface_alt_setting
   libusb_set_interface_alt_setting@12 = libusb_set_interface_alt_setting
   libusb_setlocale
