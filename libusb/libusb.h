@@ -1310,18 +1310,17 @@ enum libusb_log_level {
 };
 
 /** \ingroup libusb_lib
- * Callback function, invoked for a log message.
- * \param ctx context this callback is registered with
+ * Callback function, invoked by the core for a log message.
  * \param level the log level, see \ref libusb_log_level for a description
  * \param str the log message
- * \see libusb_set_log_handler()
+ * \see libusb_set_log_cb()
  */
-typedef void (LIBUSB_CALL *libusb_log_handler_cb)(enum libusb_log_level level, const char *str);
+typedef void (LIBUSB_CALL *libusb_log_cb)(enum libusb_log_level level, const char *str);
 
 int LIBUSB_CALL libusb_init(libusb_context **ctx);
 void LIBUSB_CALL libusb_exit(libusb_context *ctx);
 void LIBUSB_CALL libusb_set_debug(libusb_context *ctx, int level);
-void LIBUSB_CALL libusb_set_log_handler(libusb_log_handler_cb callback);
+void LIBUSB_CALL libusb_set_log_cb(libusb_log_cb callback);
 const struct libusb_version * LIBUSB_CALL libusb_get_version(void);
 int LIBUSB_CALL libusb_has_capability(uint32_t capability);
 const char * LIBUSB_CALL libusb_error_name(int errcode);
@@ -1388,7 +1387,6 @@ int LIBUSB_CALL libusb_get_max_iso_packet_size(libusb_device *dev,
 	unsigned char endpoint);
 
 int LIBUSB_CALL libusb_open(libusb_device *dev, libusb_device_handle **dev_handle);
-int LIBUSB_CALL libusb_fdopen(libusb_device *dev, intptr_t fd, libusb_device_handle **dev_handle);
 void LIBUSB_CALL libusb_close(libusb_device_handle *dev_handle);
 libusb_device * LIBUSB_CALL libusb_get_device(libusb_device_handle *dev_handle);
 
@@ -2018,6 +2016,11 @@ int LIBUSB_CALL libusb_hotplug_register_callback(libusb_context *ctx,
  */
 void LIBUSB_CALL libusb_hotplug_deregister_callback(libusb_context *ctx,
 						libusb_hotplug_callback_handle callback_handle);
+
+/* Android specific */
+
+int LIBUSB_CALL libusb_fdopen(libusb_device *dev, int fd, libusb_device_handle **dev_handle);
+int LIBUSB_CALL libusb_cache_device_fd(libusb_context *ctx, int fd, int add);
 
 #ifdef __cplusplus
 }

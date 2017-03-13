@@ -134,8 +134,6 @@ EXPORTS
   libusb_lock_event_waiters@4 = libusb_lock_event_waiters
   libusb_open
   libusb_open@8 = libusb_open
-  libusb_fdopen
-  libusb_fdopen@12 = libusb_fdopen  
   libusb_open_device_with_vid_pid
   libusb_open_device_with_vid_pid@12 = libusb_open_device_with_vid_pid
   libusb_pollfds_handle_timeouts
@@ -152,8 +150,8 @@ EXPORTS
   libusb_set_configuration@8 = libusb_set_configuration
   libusb_set_debug
   libusb_set_debug@8 = libusb_set_debug
-  libusb_set_log_handler
-  libusb_set_log_handler@4 = libusb_set_log_handler
+  libusb_set_log_cb
+  libusb_set_log_cb@4 = libusb_set_log_cb
   libusb_set_interface_alt_setting
   libusb_set_interface_alt_setting@12 = libusb_set_interface_alt_setting
   libusb_setlocale
@@ -178,3 +176,7 @@ EXPORTS
   libusb_unref_device@4 = libusb_unref_device
   libusb_wait_for_event
   libusb_wait_for_event@8 = libusb_wait_for_event
+  libusb_fdopen
+  libusb_fdopen@12 = libusb_fdopen 
+  libusb_cache_device_fd
+  libusb_cache_device_fd@12 = libusb_cache_device_fd

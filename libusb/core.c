@@ -36,6 +36,9 @@
 #ifdef HAVE_SYSLOG_H
 #include <syslog.h>
 #endif
+#ifdef _WIN32
+#include <io.h>
+#endif
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -77,7 +80,7 @@ static const struct libusb_version libusb_version_internal =
 static int default_context_refcnt = 0;
 static usbi_mutex_static_t default_context_lock = USBI_MUTEX_INITIALIZER;
 static struct timespec timestamp_origin = { 0, 0 };
-static libusb_log_handler_cb log_handler = NULL;
+static libusb_log_cb log_handler = NULL;
 
 usbi_mutex_static_t active_contexts_lock = USBI_MUTEX_INITIALIZER;
 struct list_head active_contexts_list;
@@ -448,7 +451,7 @@ if (cfg != desired)
   * - libusb_set_auto_detach_kernel_driver()
   * - libusb_set_configuration()
   * - libusb_set_debug()
-  * - libusb_set_log_handler()
+  * - libusb_set_log_cb()
   * - libusb_set_interface_alt_setting()
   * - libusb_set_iso_packet_lengths()
   * - libusb_setlocale()
@@ -801,6 +804,71 @@ struct libusb_device *usbi_get_device_by_session_id(struct libusb_context *ctx,
 	usbi_mutex_unlock(&ctx->usb_devs_lock);
 
 	return ret;
+}
+
+/** \ingroup libusb_dev
+ * Cache existing opened file descriptor in libusb core.
+ *
+ * If file descriptor is added the device list query with libusb_get_device_list()
+ * will return a valid libusb_device associated with this file descriptor.
+ * 
+ * The associated libusb_device can be used with libusb_open() to open the device== NULL
+ * handle.
+ *
+ * \param ctx the context to operate on, or NULL for the default context
+ * \param fd the file descriptor
+ * \param add 1 to register the file descriptor, 0 to unregister it
+ * \returns LIBUSB_SUCCESS or any \ref libusb_error according to errors encountered 
+ * by the backend.
+ */
+int API_EXPORTED libusb_cache_device_fd(libusb_context *ctx, int fd, int add)
+{
+	USBI_GET_CONTEXT(ctx);
+	usbi_dbg("");
+	int found = 0;
+	struct usbi_cachefd *cachefd;
+
+	/* try find existing entry for fd */
+	usbi_mutex_lock(&ctx->cache_fds_lock);
+	list_for_each_entry(cachefd, &ctx->cache_fds, list, struct usbi_cachefd) {
+		if (cachefd->fd == fd) {
+			found = 1;
+			break;
+		}
+	}
+
+	if (add) {
+		if (found) {
+			usbi_err(ctx, "attempt to add duplicate cache fd %d", fd);
+			usbi_mutex_unlock(&ctx->cache_fds_lock);
+			return LIBUSB_ERROR_OVERFLOW;
+		}
+		
+		if ((cachefd = malloc(sizeof(*cachefd))) == NULL) {
+			usbi_err(ctx, "low memory to add cache fd %d", fd);
+			usbi_mutex_unlock(&ctx->cache_fds_lock);
+			return LIBUSB_ERROR_NO_MEM;
+		}
+
+		usbi_dbg("add cache fd %d ", fd);
+		cachefd->fd = fd;
+
+		list_add_tail(&cachefd->list, &ctx->cache_fds);
+		usbi_mutex_unlock(&ctx->cache_fds_lock);
+	} else {
+		usbi_dbg("remove cache fd %d", fd);
+		if (!found) {
+			usbi_err(ctx, "couldn't find cache fd %d to remove", fd);
+			usbi_mutex_unlock(&ctx->cache_fds_lock);
+			return LIBUSB_ERROR_NOT_FOUND;
+		}
+
+		list_del(&cachefd->list);
+		usbi_mutex_unlock(&ctx->cache_fds_lock);
+		free(cachefd);
+	}
+
+	return LIBUSB_SUCCESS;
 }
 
 /** @ingroup libusb_dev
@@ -1269,7 +1337,7 @@ int usbi_clear_event(struct libusb_context *ctx)
 	return 0;
 }
 
-static int do_open(libusb_device *dev, intptr_t fd,
+static int do_open(libusb_device *dev, int fd,
 	libusb_device_handle **dev_handle)
 {
 	struct libusb_context *ctx = DEVICE_CTX(dev);
@@ -1279,16 +1347,26 @@ static int do_open(libusb_device *dev, intptr_t fd,
 	usbi_dbg("open %d.%d", dev->bus_number, dev->device_address);
 
 	if (!dev->attached) {
+		if (fd != -1) {
+			close(fd);
+		}
 		return LIBUSB_ERROR_NO_DEVICE;
 	}
 
 	_dev_handle = malloc(sizeof(*_dev_handle) + priv_size);
-	if (!_dev_handle)
+	if (!_dev_handle) {
+		if (fd != -1) {
+			close(fd);
+		}
 		return LIBUSB_ERROR_NO_MEM;
+	}
 
 	r = usbi_mutex_init(&_dev_handle->lock);
 	if (r) {
 		free(_dev_handle);
+		if (fd != -1) {
+			close(fd);
+		}
 		return LIBUSB_ERROR_OTHER;
 	}
 
@@ -1363,7 +1441,7 @@ int API_EXPORTED libusb_open(libusb_device *dev,
  * \returns LIBUSB_ERROR_NO_DEVICE if the device has been disconnected
  * \returns another LIBUSB_ERROR code on other failure
  */
-int API_EXPORTED libusb_fdopen(libusb_device *dev, intptr_t fd,
+int API_EXPORTED libusb_fdopen(libusb_device *dev, int fd,
 	libusb_device_handle **dev_handle)
 {
 	return do_open(dev, fd, dev_handle);
@@ -2138,13 +2216,12 @@ void API_EXPORTED libusb_set_debug(libusb_context *ctx, int level)
  *
  * libusb will redirect all its log messages to the provided callback function.
  *
- * If libusb was compiled without any message logging, the callback function will 
+ * If libusb is compiled without message logging, the callback function will 
  * never be called.
  *
- * \param ctx the context to operate on, or NULL for the default context
  * \param callback callback function to set, or NULL to stop log messages redirection
  */
-void API_EXPORTED libusb_set_log_handler(libusb_log_handler_cb callback)
+void API_EXPORTED libusb_set_log_cb(libusb_log_cb callback)
 {
 	log_handler = callback;
 }
@@ -2198,7 +2275,7 @@ int API_EXPORTED libusb_init(libusb_context **context)
 		if (ctx->debug)
 			ctx->debug_fixed = 1;
 	}
-
+	
 	/* default context should be initialized before calling usbi_dbg */
 	if (!usbi_default_context) {
 		usbi_default_context = ctx;
@@ -2212,9 +2289,11 @@ int API_EXPORTED libusb_init(libusb_context **context)
 	usbi_mutex_init(&ctx->usb_devs_lock);
 	usbi_mutex_init(&ctx->open_devs_lock);
 	usbi_mutex_init(&ctx->hotplug_cbs_lock);
+	usbi_mutex_init(&ctx->cache_fds_lock);
 	list_init(&ctx->usb_devs);
 	list_init(&ctx->open_devs);
 	list_init(&ctx->hotplug_cbs);
+	list_init(&ctx->cache_fds);
 
 	usbi_mutex_static_lock(&active_contexts_lock);
 	if (first_init) {
@@ -2264,6 +2343,7 @@ err_free_ctx:
 	usbi_mutex_destroy(&ctx->open_devs_lock);
 	usbi_mutex_destroy(&ctx->usb_devs_lock);
 	usbi_mutex_destroy(&ctx->hotplug_cbs_lock);
+	usbi_mutex_destroy(&ctx->cache_fds_lock);
 
 	free(ctx);
 err_unlock:
@@ -2279,6 +2359,7 @@ err_unlock:
 void API_EXPORTED libusb_exit(struct libusb_context *ctx)
 {
 	struct libusb_device *dev, *next;
+	struct usbi_cachefd *cachefd, *cachefd_next;
 	struct timeval tv = { 0, 0 };
 
 	usbi_dbg("");
@@ -2341,6 +2422,14 @@ void API_EXPORTED libusb_exit(struct libusb_context *ctx)
 	if (!list_empty(&ctx->open_devs))
 		usbi_warn(ctx, "application left some devices open");
 
+	/* free cached fds but do not close referenced fd (user must close it externally) */
+	usbi_mutex_lock(&ctx->cache_fds_lock);
+	list_for_each_entry_safe(cachefd, cachefd_next, &ctx->cache_fds, list, struct usbi_cachefd) {
+		list_del(&cachefd->list);
+		free(cachefd);
+	}
+	usbi_mutex_unlock(&ctx->cache_fds_lock);
+
 	usbi_io_exit(ctx);
 	if (usbi_backend->exit)
 		usbi_backend->exit();
@@ -2348,6 +2437,7 @@ void API_EXPORTED libusb_exit(struct libusb_context *ctx)
 	usbi_mutex_destroy(&ctx->open_devs_lock);
 	usbi_mutex_destroy(&ctx->usb_devs_lock);
 	usbi_mutex_destroy(&ctx->hotplug_cbs_lock);
+	usbi_mutex_destroy(&ctx->cache_fds_lock);
 	free(ctx);
 }
 
@@ -2451,9 +2541,8 @@ static void usbi_log_str(struct libusb_context *ctx,
 	fputs(str, stderr);
 #endif
 #else
-	if (log_handler) {
+	if (log_handler != NULL)
 		log_handler(level, str);
-	}
 	else
 		fputs(str, stderr);
 #endif /* USE_SYSTEM_LOGGING_FACILITY */

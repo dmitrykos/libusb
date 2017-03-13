@@ -343,6 +343,10 @@ struct libusb_context {
 	int timerfd;
 #endif
 
+	/* A list of cached fds. Protected by cache_fds_lock.*/
+	struct list_head cache_fds;
+	usbi_mutex_t cache_fds_lock;
+
 	struct list_head list;
 };
 
@@ -417,7 +421,7 @@ struct libusb_device_handle {
 	struct list_head list;
 	struct libusb_device *dev;
 	int auto_detach_kernel_driver;
-	intptr_t associated_fd;
+	int associated_fd;
 	unsigned char os_priv
 #if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 199901L)
 	[] /* valid C99 code */
@@ -571,6 +575,13 @@ struct usbi_pollfd {
 
 int usbi_add_pollfd(struct libusb_context *ctx, int fd, short events);
 void usbi_remove_pollfd(struct libusb_context *ctx, int fd);
+
+struct usbi_cachefd {
+	/* must come first */
+	int fd;
+
+	struct list_head list;
+};
 
 /* device discovery */
 
