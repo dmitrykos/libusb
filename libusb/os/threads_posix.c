@@ -43,7 +43,7 @@ int usbi_cond_timedwait(pthread_cond_t *cond,
 	struct timespec timeout;
 	int r;
 
-	r = usbi_backend->clock_gettime(USBI_CLOCK_REALTIME, &timeout);
+	r = usbi_backend.clock_gettime(USBI_CLOCK_REALTIME, &timeout);
 	if (r < 0)
 		return r;
 
@@ -59,7 +59,7 @@ int usbi_cond_timedwait(pthread_cond_t *cond,
 
 int usbi_get_tid(void)
 {
-	int ret = -1;
+	int ret;
 #if defined(__ANDROID__)
 	ret = gettid();
 #elif defined(__linux__)
@@ -73,6 +73,8 @@ int usbi_get_tid(void)
 	mach_port_deallocate(mach_task_self(), ret);
 #elif defined(__CYGWIN__)
 	ret = GetCurrentThreadId();
+#else
+	ret = -1;
 #endif
 /* TODO: NetBSD thread ID support */
 	return ret;

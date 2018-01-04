@@ -239,10 +239,11 @@ init_exit: // Holds semaphore here.
 	return r;
 }
 
-static void wince_exit(void)
+static void wince_exit(struct libusb_context *ctx)
 {
 	HANDLE semaphore;
 	TCHAR sem_name[11 + 8 + 1]; // strlen("libusb_init") + (32-bit hex PID) + '\0'
+	UNUSED(ctx);
 
 	_stprintf(sem_name, _T("libusb_init%08X"), (unsigned int)(GetCurrentProcessId() & 0xFFFFFFFF));
 	semaphore = CreateSemaphore(NULL, 1, 1, sem_name);
@@ -328,7 +329,7 @@ static int wince_get_device_list(
 		}
 
 		new_devices = discovered_devs_append(new_devices, dev);
-		if (!discdevs) {
+		if (!new_devices) {
 			r = LIBUSB_ERROR_NO_MEM;
 			goto err_out;
 		}
@@ -848,11 +849,12 @@ static int wince_clock_gettime(int clk_id, struct timespec *tp)
 	}
 }
 
-const struct usbi_os_backend wince_backend = {
+const struct usbi_os_backend usbi_backend = {
 	"Windows CE",
 	0,
 	wince_init,
 	wince_exit,
+	NULL,				/* set_option() */
 
 	wince_get_device_list,
 	NULL,				/* hotplug_poll */
@@ -893,6 +895,7 @@ const struct usbi_os_backend wince_backend = {
 	NULL,				/* handle_transfer_completion() */
 
 	wince_clock_gettime,
+	0,
 	sizeof(struct wince_device_priv),
 	0,
 	sizeof(struct wince_transfer_priv),
