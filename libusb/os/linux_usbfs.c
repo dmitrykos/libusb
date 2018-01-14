@@ -1433,8 +1433,23 @@ static int sysfs_get_device_list(struct libusb_context *ctx)
 	/* successful if at least one device was enumerated or no devices were found */
 	if (num_enumerated || !num_devices)
 		return LIBUSB_SUCCESS;
-	else
+	else {
+	/* some android firmwares allow to enumerate SYSFS_DEVICE_PATH but do not allow to 
+	 * open device inside of it that will cause sysfs_scan_device() to fail thus num_enumerated and
+	 * num_enumerated will always be 0, num_devices non 0 and libusb will fail to initialize */
+#ifdef __ANDROID__
+		/* disable SYSFS as unusable */
+		sysfs_can_relate_devices = 0;
+		sysfs_has_descriptors = 0;
+		(void)num_devices;
+		(void)num_enumerated;
+		usbi_warn(ctx, "disable sysfs (%s) due to missing r/w permission to access devices", SYSFS_DEVICE_PATH);
+		/* do not fail */
+		return LIBUSB_SUCCESS;
+#else
 		return LIBUSB_ERROR_IO;
+#endif
+	}
 }
 
 static int cachedfds_get_device_list(struct libusb_context *ctx)
